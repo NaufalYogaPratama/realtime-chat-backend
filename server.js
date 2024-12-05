@@ -36,9 +36,17 @@ mongoose
   });
 
 // Endpoint untuk mengambil pesan
-app.get("/messages", async (req, res) => {
+app.get("/messages/:user1/:user2", async (req, res) => {
+  const { user1, user2 } = req.params;
+
   try {
-    const messages = await Message.find().sort({ timestamp: 1 }); // Menampilkan pesan berdasarkan timestamp
+    const messages = await Message.find({
+      $or: [
+        { sender: user1, receiver: user2 },
+        { sender: user2, receiver: user1 },
+      ],
+    }).sort({ timestamp: 1 }); // Urutkan berdasarkan waktu
+
     res.json(messages);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch messages" });
@@ -49,16 +57,31 @@ app.get("/messages", async (req, res) => {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
+  // Simpan ID user yang terhubung (bisa berupa username atau ID lain)
+  socket.on("register", (userId) => {
+    socket.userId = userId; // Assign userId ke socket
+    console.log(`User registered: ${userId}`);
+  });
+
   // Mendengarkan pesan dari client
-  socket.on("chatMessage", async (data) => {
-    const { sender, message } = data;
+  socket.on("privateMessage", async (data) => {
+    const { sender, receiver, message } = data;
 
     // Simpan pesan ke MongoDB
-    const newMessage = new Message({ sender, message });
+    const newMessage = new Message({ sender, receiver, message });
     await newMessage.save();
 
-    // Broadcast pesan ke semua client
-    io.emit("chatMessage", newMessage);
+    // Kirim pesan hanya ke penerima tertentu
+    const receiverSocket = [...io.sockets.sockets.values()].find(
+      (s) => s.userId === receiver
+    );
+
+    if (receiverSocket) {
+      receiverSocket.emit("privateMessage", newMessage); // Kirim pesan ke penerima
+    }
+
+    // Kirim pesan kembali ke pengirim untuk konfirmasi
+    socket.emit("privateMessage", newMessage);
   });
 
   socket.on("disconnect", () => {
